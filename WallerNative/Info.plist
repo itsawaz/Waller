@@ -24,6 +24,8 @@
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Waller uses your microphone to listen to music playing from your speakers so the wallpaper can react to the beat.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHumanReadableCopyright</key>

@@ -10,6 +10,8 @@ class SettingsManager {
         case pauseOnFullscreen = "wallr.pauseOnFullscreen"
         case isMuted           = "wallr.isMuted"
         case lastVideoPath     = "wallr.lastVideoPath"
+        case audioReactive     = "wallr.audioReactive"
+        case audioSmoothing    = "wallr.audioSmoothing"
     }
 
     var pauseOnBattery: Bool {
@@ -27,8 +29,25 @@ class SettingsManager {
         set { defaults.set(newValue, forKey: Key.isMuted.rawValue) }
     }
 
+    var audioReactive: Bool {
+        get { defaults.bool(forKey: Key.audioReactive.rawValue) }
+        set { 
+            defaults.set(newValue, forKey: Key.audioReactive.rawValue) 
+            NotificationCenter.default.post(name: .audioReactiveChanged, object: nil)
+        }
+    }
+
+    var audioSmoothing: Float {
+        get { defaults.object(forKey: Key.audioSmoothing.rawValue) == nil ? 0.7 : defaults.float(forKey: Key.audioSmoothing.rawValue) }
+        set { defaults.set(newValue, forKey: Key.audioSmoothing.rawValue) }
+    }
+
     var lastVideoPath: String? {
         get { defaults.string(forKey: Key.lastVideoPath.rawValue) }
         set { defaults.set(newValue, forKey: Key.lastVideoPath.rawValue) }
     }
+}
+
+extension Notification.Name {
+    static let audioReactiveChanged = Notification.Name("waller.audioReactiveChanged")
 }

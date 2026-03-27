@@ -8,6 +8,7 @@ DerivedData/
 # Build artifacts
 WallerNative/Waller.app/
 WallerNative/*.iconset/
+*.zip
 
 # OS
 .DS_Store

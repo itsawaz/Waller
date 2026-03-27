@@ -18,7 +18,9 @@ class WallpaperWindow: NSWindow {
     // AVFoundation pipeline
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
+    private var ambientBloomLayer: AVPlayerLayer?
     private var loopObserver: NSObjectProtocol?
+    private var settingsObserver: NSObjectProtocol?
 
     // WebKit pipeline
     private var webView: WKWebView?
@@ -59,6 +61,12 @@ class WallpaperWindow: NSWindow {
         self.contentView = view
 
         self.orderBack(nil)
+
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .audioReactiveChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.toggleAudioReactivity()
+        }
     }
 
     // MARK: - Video Playback
@@ -85,13 +93,81 @@ class WallpaperWindow: NSWindow {
         layer.videoGravity = .resizeAspectFill
         layer.frame = contentView.bounds
         contentView.layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+
+        // 1. Ambient Bloom Layer (Background)
+        let bloom = AVPlayerLayer(player: player!)
+        bloom.videoGravity = .resizeAspectFill
+        bloom.frame = contentView.bounds
+        bloom.opacity = 0.0
+        
+        if let blur = CIFilter(name: "CIGaussianBlur") {
+            blur.setDefaults()
+            blur.setValue(60.0, forKey: "inputRadius")
+            bloom.filters = [blur]
+        }
+        contentView.layer?.addSublayer(bloom)
+        ambientBloomLayer = bloom
+
+        // 2. Main Video Layer (Foreground)
         contentView.layer?.addSublayer(layer)
         playerLayer = layer
 
         player?.play()
         SettingsManager.shared.lastVideoPath = url.path
         print("[WallpaperWindow] Playing video: \(url.lastPathComponent)")
+        
+        toggleAudioReactivity()
     }
+
+    // MARK: - Audio Reactivity
+
+    private func toggleAudioReactivity() {
+        if SettingsManager.shared.audioReactive && !isPausedByMonitor, case .video = currentContent {
+            AudioReactor.shared.onUpdate = { [weak self] level in
+                self?.applyVisualizerEffect(level: level)
+            }
+            AudioReactor.shared.start()
+        } else {
+            AudioReactor.shared.stop()
+            AudioReactor.shared.onUpdate = nil
+            // Reset transforms
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.5
+                context.allowsImplicitAnimation = true
+                playerLayer?.transform = CATransform3DIdentity
+                playerLayer?.opacity = 1.0
+                ambientBloomLayer?.transform = CATransform3DIdentity
+                ambientBloomLayer?.opacity = 0.0
+            }
+        }
+    }
+
+    private func applyVisualizerEffect(level: CGFloat) {
+        guard let layer = playerLayer, let bloom = ambientBloomLayer else { return }
+
+        // Enable incredibly smooth Core Animation transitions
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.1)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+
+        // Main Scale: 1.0 (quiet) up to 1.06 (loud)
+        let scale = 1.0 + (level * 0.06)
+        layer.transform = CATransform3DMakeScale(scale, scale, 1.0)
+        
+        // Bloom Scale: expands slightly more to peek through
+        let bloomScale = 1.0 + (level * 0.12)
+        bloom.transform = CATransform3DMakeScale(bloomScale, bloomScale, 1.0)
+        
+        // True-Color Bloom Effect:
+        // As bass drops, the main video gets slightly transparent (1.0 -> 0.7)
+        // and the heavily blurred bloom layer shoots up in brightness/opacity
+        layer.opacity = 1.0 - Float(level * 0.3)
+        bloom.opacity = Float(level * 1.5) // Clamps naturally to 1.0 maximum
+
+        CATransaction.commit()
+    }
+
+
 
     // MARK: - HTML / WebView Playback
 
@@ -132,6 +208,7 @@ class WallpaperWindow: NSWindow {
         isPausedByMonitor = true
         player?.pause()
         webView?.evaluateJavaScript("document.body.style.animationPlayState='paused'", completionHandler: nil)
+        toggleAudioReactivity()
         print("[WallpaperWindow] Paused by monitor.")
     }
 
@@ -140,6 +217,7 @@ class WallpaperWindow: NSWindow {
         isPausedByMonitor = false
         player?.play()
         webView?.evaluateJavaScript("document.body.style.animationPlayState='running'", completionHandler: nil)
+        toggleAudioReactivity()
         print("[WallpaperWindow] Resumed by monitor.")
     }
 
@@ -151,6 +229,8 @@ class WallpaperWindow: NSWindow {
     }
 
     private func clearAll() {
+        toggleAudioReactivity() // Stop audio reactor if running
+
         // Stop video
         player?.pause()
         if let obs = loopObserver {
@@ -159,6 +239,8 @@ class WallpaperWindow: NSWindow {
         }
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
+        ambientBloomLayer?.removeFromSuperlayer()
+        ambientBloomLayer = nil
         player = nil
 
         // Stop web view
@@ -178,50 +260,4 @@ class WallpaperWindow: NSWindow {
         SettingsManager.shared.isMuted = muted
     }
 
-    // MARK: - Lock Screen / Desktop Wallpaper
-
-    func setCurrentFrameAsDesktopWallpaper() {
-        // For HTML wallpaper: snapshot the WKWebView
-        if case .html = currentContent, let wv = webView {
-            wv.takeSnapshot(with: nil) { [weak self] image, error in
-                if let error { print("[WallpaperWindow] Snapshot error: \(error)"); return }
-                guard let image else { return }
-                self?.writeImageAsWallpaper(image)
-            }
-            return
-        }
-
-        // For video: grab current AVPlayer frame
-        guard let player,
-              let currentItem = player.currentItem else { return }
-
-        let gen = AVAssetImageGenerator(asset: currentItem.asset)
-        gen.appliesPreferredTrackTransform = true
-        gen.requestedTimeToleranceBefore = CMTime(seconds: 0.1, preferredTimescale: 600)
-        gen.requestedTimeToleranceAfter  = CMTime(seconds: 0.5, preferredTimescale: 600)
-
-        gen.generateCGImageAsynchronously(for: player.currentTime()) { cg, _, error in
-            if let error { print("[WallpaperWindow] Frame capture error: \(error)"); return }
-            guard let cg else { return }
-            let image = NSImage(cgImage: cg, size: NSScreen.main?.frame.size ?? .zero)
-            DispatchQueue.main.async { self.writeImageAsWallpaper(image) }
-        }
-    }
-
-    private func writeImageAsWallpaper(_ image: NSImage) {
-        let dest = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("waller_wallpaper.jpg")
-        if let tiff = image.tiffRepresentation,
-           let bmp  = NSBitmapImageRep(data: tiff),
-           let jpg  = bmp.representation(using: .jpeg, properties: [.compressionFactor: 0.92]) {
-            try? jpg.write(to: dest)
-        }
-        guard let screen = NSScreen.main else { return }
-        do {
-            try NSWorkspace.shared.setDesktopImageURL(dest, for: screen, options: [:])
-            print("[WallpaperWindow] Desktop wallpaper updated.")
-        } catch {
-            print("[WallpaperWindow] setDesktopImageURL error: \(error)")
-        }
-    }
 }

@@ -28,9 +28,9 @@ if [ -f "${ICON_PNG}" ]; then
     ICONSET="AppIcon.iconset"
     mkdir -p "${ICONSET}"
     for SIZE in 16 32 64 128 256 512 1024; do
-        sips -z ${SIZE} ${SIZE} "${ICON_PNG}" --out "${ICONSET}/icon_${SIZE}x${SIZE}.png" > /dev/null 2>&1
+        sips -z ${SIZE} ${SIZE} "${ICON_PNG}" --out "${ICONSET}/icon_${SIZE}x${SIZE}.png" > /dev/null 2>&1 || true
     done
-    iconutil -c icns "${ICONSET}" -o "${CONTENTS}/Resources/AppIcon.icns"
+    iconutil -c icns "${ICONSET}" -o "${CONTENTS}/Resources/AppIcon.icns" > /dev/null 2>&1 || true
     rm -rf "${ICONSET}"
     echo "   ✅ Icon converted"
 fi
